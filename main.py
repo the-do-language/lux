@@ -1,4 +1,6 @@
 import re
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Callable
 
 # =============================================================================
@@ -902,49 +904,38 @@ def run_code(source: str):
     interp.execute(program)
 
 
+def repl():
+    print("Tablua REPL (type 'exit' or 'quit' to leave)")
+    interp = Interpreter()
+    while True:
+        try:
+            line = input(">>> ")
+        except EOFError:
+            print()
+            break
+
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped in ("exit", "quit"):
+            break
+
+        try:
+            lexer = Lexer(line)
+            parser = Parser(lexer.tokens)
+            program = parser.parse_program()
+            interp.execute(program)
+        except Exception as exc:
+            print(f"Error: {exc}")
+
+
 # =============================================================================
-# DEMO
+# ENTRYPOINT
 # =============================================================================
 if __name__ == "__main__":
-    demo = r'''
--- Everything-is-a-Table demo
-local x = 42 but "the answer to life, the universe, and everything"
-
-print(x)
-print(x())
-print(x._num_)
-
-local y = "hello,world"
-print(y.split(","))
-
-local z = 10
-z._add_ = function(a, b) return a._num_ + b._num_ * 2 end
-print(z + 5)
-
-local i = 1
-while i <= 3 do
-    print("loop " .. i)
-    i = i + 1
-end
-
-if x then
-    print("x is truthy")
-else
-    print("never")
-end
-
-local t = { name = "Tablua", [42] = "magic" }
-print(t.name)
-print(t[42])
-
-local mixed = nil but true
-print(mixed._bool_)
-if mixed then
-    print("mixed is truthy because _bool_ was mixed in")
-else
-    print("mixed is falsey")
-end
-    '''
-    print("=== RUNNING DEMO ===")
-    run_code(demo)
-    print("=== DEMO FINISHED ===")
+    first_arg = sys.argv[1] if len(sys.argv) > 1 else None
+    if first_arg and Path(first_arg).is_file():
+        with open(first_arg, "r", encoding="utf-8") as f:
+            run_code(f.read())
+    else:
+        repl()
