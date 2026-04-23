@@ -722,7 +722,7 @@ class Interpreter:
         self.global_env['but'] = make_function(lambda l, r: but(l, r))
 
     def execute(self, program: List[ASTNode]):
-        env = self.global_env.copy()
+        env = self.global_env
         for stmt in program:
             self._exec_stmt(stmt, env)
 
@@ -904,29 +904,61 @@ def run_code(source: str):
     interp.execute(program)
 
 
+def _block_delta(source: str) -> int:
+    delta = 0
+    tokens = Lexer(source).tokens
+    for tok in tokens:
+        if tok.type != 'KEYWORD':
+            continue
+        if tok.value in {'if', 'while', 'for', 'function', 'do', 'repeat'}:
+            delta += 1
+        elif tok.value in {'end', 'until'}:
+            delta -= 1
+    return delta
+
+
 def repl():
     print("Tablua REPL (type 'exit' or 'quit' to leave)")
     interp = Interpreter()
+    buffer: List[str] = []
+    block_depth = 0
+
     while True:
+        prompt = '>>> ' if block_depth == 0 else '... '
         try:
-            line = input(">>> ")
+            line = input(prompt)
         except EOFError:
             print()
             break
 
         stripped = line.strip()
-        if not stripped:
+        if block_depth == 0 and not stripped:
             continue
-        if stripped in ("exit", "quit"):
+        if block_depth == 0 and stripped in ("exit", "quit"):
             break
 
+        buffer.append(line)
+        block_depth += _block_delta(line)
+
+        if block_depth > 0:
+            continue
+        if block_depth < 0:
+            print("Error: unexpected block terminator")
+            buffer.clear()
+            block_depth = 0
+            continue
+
+        source = "\n".join(buffer)
         try:
-            lexer = Lexer(line)
+            lexer = Lexer(source)
             parser = Parser(lexer.tokens)
             program = parser.parse_program()
             interp.execute(program)
         except Exception as exc:
             print(f"Error: {exc}")
+        finally:
+            buffer.clear()
+            block_depth = 0
 
 
 # =============================================================================
