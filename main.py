@@ -1,5 +1,6 @@
 import re
 import sys
+import readline
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Callable
 
@@ -721,10 +722,18 @@ class Interpreter:
         )
         self.global_env['but'] = make_function(lambda l, r: but(l, r))
 
-    def execute(self, program: List[ASTNode]):
+    def execute(self, program: List[ASTNode], capture_results: bool = False) -> List[Table]:
         env = self.global_env
+        results: List[Table] = []
         for stmt in program:
-            self._exec_stmt(stmt, env)
+            if isinstance(stmt, ExprStmt):
+                value = self._eval_expr(stmt.expr, env)
+            else:
+                ret = self._exec_stmt(stmt, env)
+                value = ret if ret is not None else make_nil()
+            if capture_results:
+                results.append(value if isinstance(value, Table) else make_value(value))
+        return results
 
     def _exec_stmt(self, stmt: ASTNode, env: Dict[str, Table]) -> Optional[Table]:
         if isinstance(stmt, AssignStmt):
@@ -917,6 +926,35 @@ def _block_delta(source: str) -> int:
     return delta
 
 
+def _expected_indent(block_depth: int, line: str) -> int:
+    stripped = line.strip()
+    if stripped.startswith('end') or stripped.startswith('until'):
+        return max(block_depth - 1, 0) * 3
+    return max(block_depth, 0) * 3
+
+
+def _normalize_line_indent(block_depth: int, line: str) -> str:
+    stripped = line.strip()
+    if not stripped:
+        return ''
+    return (' ' * _expected_indent(block_depth, line)) + stripped
+
+
+def _read_repl_line(prompt: str, block_depth: int) -> str:
+    seed = ' ' * (block_depth * 3)
+
+    def startup_hook():
+        if seed:
+            readline.insert_text(seed)
+            readline.redisplay()
+
+    readline.set_startup_hook(startup_hook)
+    try:
+        return input(prompt)
+    finally:
+        readline.set_startup_hook()
+
+
 def repl():
     print("Tablua REPL (type 'exit' or 'quit' to leave)")
     interp = Interpreter()
@@ -926,7 +964,7 @@ def repl():
     while True:
         prompt = '>>> ' if block_depth == 0 else '... '
         try:
-            line = input(prompt)
+            line = _read_repl_line(prompt, block_depth)
         except EOFError:
             print()
             break
@@ -937,6 +975,7 @@ def repl():
         if block_depth == 0 and stripped in ("exit", "quit"):
             break
 
+        line = _normalize_line_indent(block_depth, line)
         buffer.append(line)
         block_depth += _block_delta(line)
 
@@ -953,7 +992,8 @@ def repl():
             lexer = Lexer(source)
             parser = Parser(lexer.tokens)
             program = parser.parse_program()
-            interp.execute(program)
+            for result in interp.execute(program, capture_results=True):
+                print(result.get_str() if isinstance(result, Table) else str(result))
         except Exception as exc:
             print(f"Error: {exc}")
         finally:
