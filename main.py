@@ -202,10 +202,22 @@ class Table:
         raise TypeError(f"cannot compare <= {self} and {other}")
 
     def __bool__(self) -> bool:
+        fields = object.__getattribute__(self, '_fields')
+        if '_bool_' in fields:
+            bool_val = fields['_bool_']
+            if isinstance(bool_val, Table):
+                return bool(bool_val)
+            return bool(bool_val)
+
+        self_key = fields.get('_self_')
+        if isinstance(self_key, str) and self_key in fields:
+            core = fields[self_key]
+            resolved = bool(core) if isinstance(core, Table) else bool(core)
+            fields['_bool_'] = resolved
+            return resolved
+
         if self._kind == 'nil':
             return False
-        if self._kind == 'boolean':
-            return self._payload
         return True
 
 
@@ -268,10 +280,11 @@ def but(left: Any, right: Any) -> Table:
     right = make_value(right)
     new = Table(left._kind, left._payload)
     new._fields = object.__getattribute__(left, '_fields').copy()
-    if right._kind == 'string':
-        new._fields['_str_'] = right._payload
-    else:
-        new._fields.update(object.__getattribute__(right, '_fields'))
+    right_fields = object.__getattribute__(right, '_fields')
+    for key, value in right_fields.items():
+        if key == '_self_':
+            continue
+        new._fields[key] = value
     return new
 
 
@@ -923,6 +936,14 @@ end
 local t = { name = "Tablua", [42] = "magic" }
 print(t.name)
 print(t[42])
+
+local mixed = nil but true
+print(mixed._bool_)
+if mixed then
+    print("mixed is truthy because _bool_ was mixed in")
+else
+    print("mixed is falsey")
+end
     '''
     print("=== RUNNING DEMO ===")
     run_code(demo)
