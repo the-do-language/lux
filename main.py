@@ -5,11 +5,31 @@ from typing import Any, Dict, List, Optional, Union, Callable
 # CORE: THE TABLE CLASS (EVERYTHING is a Table)
 # =============================================================================
 class Table:
+    LEGACY_FIELD_ALIASES = {
+        'num': '_num_',
+        'str': '_str_',
+        'bool': '_bool_',
+        'self': '_self_',
+        'call': '_call_',
+        'add': '_add_',
+        'sub': '_sub_',
+        'mul': '_mul_',
+        'div': '_div_',
+        'mod': '_mod_',
+        'pow': '_pow_',
+        'eq': '_eq_',
+        'lt': '_lt_',
+        'le': '_le_',
+    }
+
     def __init__(self, kind: str = 'nil', payload: Any = None):
         object.__setattr__(self, '_kind', kind)
         object.__setattr__(self, '_payload', payload)
         object.__setattr__(self, '_fields', {})
         self._setup_builtins()
+
+    def _normalize_field_name(self, name: str) -> str:
+        return self.LEGACY_FIELD_ALIASES.get(name, name)
 
     def _setup_builtins(self):
         fields = object.__getattribute__(self, '_fields')
@@ -17,11 +37,11 @@ class Table:
         payload = object.__getattribute__(self, '_payload')
 
         if kind == 'number':
-            fields['num'] = payload
-            fields['self'] = 'num'
+            fields['_num_'] = payload
+            fields['_self_'] = '_num_'
         elif kind == 'string':
-            fields['str'] = payload
-            fields['self'] = 'str'
+            fields['_str_'] = payload
+            fields['_self_'] = '_str_'
             # split returns Python list → later turned into Table array by make_value
             fields['split'] = lambda sep: [
                 make_string(x) for x in payload.split(
@@ -29,16 +49,16 @@ class Table:
                 )
             ]
         elif kind == 'boolean':
-            fields['bool'] = payload
-            fields['self'] = 'bool'
+            fields['_bool_'] = payload
+            fields['_self_'] = '_bool_'
         elif kind == 'function':
-            fields['self'] = 'call'
+            fields['_self_'] = '_call_'
         elif kind == 'table':
-            fields['str'] = 'table'
+            fields['_str_'] = 'table'
 
     def __getattr__(self, name: str):
         fields = object.__getattribute__(self, '_fields')
-        val = fields.get(name)
+        val = fields.get(self._normalize_field_name(name))
         if val is None:
             return make_nil()
         if isinstance(val, Table):
@@ -51,17 +71,18 @@ class Table:
         else:
             if not isinstance(value, Table):
                 value = make_value(value)
-            object.__getattribute__(self, '_fields')[name] = value
+            key = self._normalize_field_name(name)
+            object.__getattribute__(self, '_fields')[key] = value
 
     def __call__(self, *args):
         fields = object.__getattribute__(self, '_fields')
-        if 'call' in fields:
-            call_val = fields['call']
+        if '_call_' in fields:
+            call_val = fields['_call_']
             if callable(call_val):
                 result = call_val(*args)
                 return make_value(result) if not isinstance(result, Table) else result
             return make_value(call_val)
-        self_key = fields.get('self')
+        self_key = fields.get('_self_')
         if isinstance(self_key, str) and self_key in fields:
             val = fields[self_key]
             return make_value(val) if not isinstance(val, Table) else val
@@ -69,14 +90,14 @@ class Table:
 
     def get_str(self) -> str:
         fields = object.__getattribute__(self, '_fields')
-        str_val = fields.get('str')
+        str_val = fields.get('_str_')
         if isinstance(str_val, str):
             return str_val
-        self_key = fields.get('self')
+        self_key = fields.get('_self_')
         if isinstance(self_key, str) and self_key in fields:
             core = fields[self_key]
             auto = str(core) if not isinstance(core, Table) else core.get_str()
-            fields['str'] = auto
+            fields['_str_'] = auto
             return auto
         return 'nil'
 
@@ -101,7 +122,7 @@ class Table:
 
     def __add__(self, other: Any) -> 'Table':
         other = make_value(other)
-        res = self._call_magic('add', other)
+        res = self._call_magic('_add_', other)
         if res is not None:
             return res
         if self._kind == 'number' and other._kind == 'number':
@@ -110,7 +131,7 @@ class Table:
 
     def __sub__(self, other: Any) -> 'Table':
         other = make_value(other)
-        res = self._call_magic('sub', other)
+        res = self._call_magic('_sub_', other)
         if res is not None:
             return res
         if self._kind == 'number' and other._kind == 'number':
@@ -119,7 +140,7 @@ class Table:
 
     def __mul__(self, other: Any) -> 'Table':
         other = make_value(other)
-        res = self._call_magic('mul', other)
+        res = self._call_magic('_mul_', other)
         if res is not None:
             return res
         if self._kind == 'number' and other._kind == 'number':
@@ -128,7 +149,7 @@ class Table:
 
     def __truediv__(self, other: Any) -> 'Table':
         other = make_value(other)
-        res = self._call_magic('div', other)
+        res = self._call_magic('_div_', other)
         if res is not None:
             return res
         if self._kind == 'number' and other._kind == 'number':
@@ -137,7 +158,7 @@ class Table:
 
     def __mod__(self, other: Any) -> 'Table':
         other = make_value(other)
-        res = self._call_magic('mod', other)
+        res = self._call_magic('_mod_', other)
         if res is not None:
             return res
         if self._kind == 'number' and other._kind == 'number':
@@ -146,7 +167,7 @@ class Table:
 
     def __pow__(self, other: Any) -> 'Table':
         other = make_value(other)
-        res = self._call_magic('pow', other)
+        res = self._call_magic('_pow_', other)
         if res is not None:
             return res
         if self._kind == 'number' and other._kind == 'number':
@@ -155,7 +176,7 @@ class Table:
 
     def __eq__(self, other: Any) -> bool:
         other = make_value(other)
-        res = self._call_magic('eq', other)
+        res = self._call_magic('_eq_', other)
         if res is not None:
             return bool(res)
         if self._kind == other._kind and self._kind in ('number', 'string', 'boolean'):
@@ -164,7 +185,7 @@ class Table:
 
     def __lt__(self, other: Any) -> bool:
         other = make_value(other)
-        res = self._call_magic('lt', other)
+        res = self._call_magic('_lt_', other)
         if res is not None:
             return bool(res)
         if self._kind == 'number' and other._kind == 'number':
@@ -173,7 +194,7 @@ class Table:
 
     def __le__(self, other: Any) -> bool:
         other = make_value(other)
-        res = self._call_magic('le', other)
+        res = self._call_magic('_le_', other)
         if res is not None:
             return bool(res)
         if self._kind == 'number' and other._kind == 'number':
@@ -211,7 +232,7 @@ def make_string(s: str) -> Table:
 
 def make_function(py_callable: Callable) -> Table:
     t = Table('function')
-    t._fields['call'] = py_callable
+    t._fields['_call_'] = py_callable
     t._setup_builtins()
     return t
 
@@ -248,7 +269,7 @@ def but(left: Any, right: Any) -> Table:
     new = Table(left._kind, left._payload)
     new._fields = object.__getattribute__(left, '_fields').copy()
     if right._kind == 'string':
-        new._fields['str'] = right._payload
+        new._fields['_str_'] = right._payload
     else:
         new._fields.update(object.__getattribute__(right, '_fields'))
     return new
@@ -276,11 +297,11 @@ class Lexer:
         token_spec = [
             ('NUMBER',   r'\d+\.?\d*|\.\d+'),
             ('STRING',   r'"([^"\\]|\\.)*"|\'([^\'\\]|\\.)*\''), 
-            ('BUT',      r'but'),
+            ('BUT',      r'\bbut\b'),
             ('KEYWORD',  r'\b(if|elseif|else|end|then|while|do|for|repeat|until|local|function|return|and|or|not|true|false|nil)\b'),
             ('IDENT',    r'[a-zA-Z_][a-zA-Z0-9_]*'),
-            ('OP',       r'==|~=|<=|>=|::|\.\.|->|\+|-|\*|/|%|\^|<|>|<=|>=|=|,|;|\.|\[|\]|\{|\}|\(|\)'),
             ('COMMENT',  r'--.*'),
+            ('OP',       r'==|~=|<=|>=|::|\.\.|->|\+|-|\*|/|%|\^|<|>|<=|>=|=|,|;|\.|\[|\]|\{|\}|\(|\)'),
             ('WHITESPACE', r'\s+'),
         ]
         pattern = '|'.join(f'(?P<{name}>{regex})' for name, regex in token_spec)
@@ -878,13 +899,13 @@ local x = 42 but "the answer to life, the universe, and everything"
 
 print(x)
 print(x())
-print(x.num)
+print(x._num_)
 
 local y = "hello,world"
 print(y.split(","))
 
 local z = 10
-z.add = function(a, b) return a.num + b.num * 2 end
+z._add_ = function(a, b) return a._num_ + b._num_ * 2 end
 print(z + 5)
 
 local i = 1
