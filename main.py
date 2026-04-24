@@ -190,6 +190,27 @@ class Table:
             return auto
         return 'nil'
 
+    def _coerce_number(self) -> Optional[float]:
+        if self._kind == 'number':
+            return float(self._payload)
+
+        fields = object.__getattribute__(self, '_fields')
+        num_val = fields.get('_num_')
+        if isinstance(num_val, Table):
+            if num_val._kind == 'number':
+                return float(num_val._payload)
+        elif isinstance(num_val, (int, float)):
+            return float(num_val)
+
+        self_key = fields.get('_self_')
+        if isinstance(self_key, str) and self_key in fields:
+            core = fields[self_key]
+            if isinstance(core, Table):
+                return core._coerce_number()
+            if isinstance(core, (int, float)):
+                return float(core)
+        return None
+
     def __str__(self) -> str:
         return self.get_str()
 
@@ -217,8 +238,10 @@ class Table:
         res = self._call_magic('_add_', other)
         if res is not None:
             return res
-        if self._kind == 'number' and other._kind == 'number':
-            return make_number(self._payload + other._payload)
+        left_num = self._coerce_number()
+        right_num = other._coerce_number()
+        if left_num is not None and right_num is not None:
+            return make_number(left_num + right_num)
         raise TypeError(f"cannot add {self} and {other}")
 
     def __sub__(self, other: Any) -> 'Table':
@@ -226,8 +249,10 @@ class Table:
         res = self._call_magic('_sub_', other)
         if res is not None:
             return res
-        if self._kind == 'number' and other._kind == 'number':
-            return make_number(self._payload - other._payload)
+        left_num = self._coerce_number()
+        right_num = other._coerce_number()
+        if left_num is not None and right_num is not None:
+            return make_number(left_num - right_num)
         raise TypeError(f"cannot subtract {self} and {other}")
 
     def __mul__(self, other: Any) -> 'Table':
@@ -235,8 +260,10 @@ class Table:
         res = self._call_magic('_mul_', other)
         if res is not None:
             return res
-        if self._kind == 'number' and other._kind == 'number':
-            return make_number(self._payload * other._payload)
+        left_num = self._coerce_number()
+        right_num = other._coerce_number()
+        if left_num is not None and right_num is not None:
+            return make_number(left_num * right_num)
         raise TypeError(f"cannot multiply {self} and {other}")
 
     def __truediv__(self, other: Any) -> 'Table':
@@ -244,8 +271,10 @@ class Table:
         res = self._call_magic('_div_', other)
         if res is not None:
             return res
-        if self._kind == 'number' and other._kind == 'number':
-            return make_number(self._payload / other._payload)
+        left_num = self._coerce_number()
+        right_num = other._coerce_number()
+        if left_num is not None and right_num is not None:
+            return make_number(left_num / right_num)
         raise TypeError(f"cannot divide {self} and {other}")
 
     def __mod__(self, other: Any) -> 'Table':
@@ -253,8 +282,10 @@ class Table:
         res = self._call_magic('_mod_', other)
         if res is not None:
             return res
-        if self._kind == 'number' and other._kind == 'number':
-            return make_number(self._payload % other._payload)
+        left_num = self._coerce_number()
+        right_num = other._coerce_number()
+        if left_num is not None and right_num is not None:
+            return make_number(left_num % right_num)
         raise TypeError(f"cannot mod {self} and {other}")
 
     def __pow__(self, other: Any) -> 'Table':
@@ -262,8 +293,10 @@ class Table:
         res = self._call_magic('_pow_', other)
         if res is not None:
             return res
-        if self._kind == 'number' and other._kind == 'number':
-            return make_number(self._payload ** other._payload)
+        left_num = self._coerce_number()
+        right_num = other._coerce_number()
+        if left_num is not None and right_num is not None:
+            return make_number(left_num ** right_num)
         raise TypeError(f"cannot pow {self} and {other}")
 
     def __eq__(self, other: Any) -> bool:
@@ -280,8 +313,10 @@ class Table:
         res = self._call_magic('_lt_', other)
         if res is not None:
             return bool(res)
-        if self._kind == 'number' and other._kind == 'number':
-            return self._payload < other._payload
+        left_num = self._coerce_number()
+        right_num = other._coerce_number()
+        if left_num is not None and right_num is not None:
+            return left_num < right_num
         raise TypeError(f"cannot compare < {self} and {other}")
 
     def __le__(self, other: Any) -> bool:
@@ -289,8 +324,10 @@ class Table:
         res = self._call_magic('_le_', other)
         if res is not None:
             return bool(res)
-        if self._kind == 'number' and other._kind == 'number':
-            return self._payload <= other._payload
+        left_num = self._coerce_number()
+        right_num = other._coerce_number()
+        if left_num is not None and right_num is not None:
+            return left_num <= right_num
         raise TypeError(f"cannot compare <= {self} and {other}")
 
     def __bool__(self) -> bool:
@@ -819,6 +856,9 @@ class Interpreter:
         self.global_env: Dict[str, Table] = {}
         self.global_env['print'] = make_function(
             lambda *args: print(' '.join(a.get_str() for a in args)) or make_nil()
+        )
+        self.global_env['str'] = make_function(
+            lambda value: make_string(value.get_str() if isinstance(value, Table) else str(value))
         )
         self.global_env['but'] = make_function(lambda l, r: but(l, r))
         self.global_env['setmetatable'] = make_function(self._set_metatable)
