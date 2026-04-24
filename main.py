@@ -23,12 +23,25 @@ class Table:
         'eq': '_eq_',
         'lt': '_lt_',
         'le': '_le_',
+        '__index': '_index_',
+        '__newindex': '_newindex_',
+        '__call': '_call_',
+        '__add': '_add_',
+        '__sub': '_sub_',
+        '__mul': '_mul_',
+        '__div': '_div_',
+        '__mod': '_mod_',
+        '__pow': '_pow_',
+        '__eq': '_eq_',
+        '__lt': '_lt_',
+        '__le': '_le_',
     }
 
     def __init__(self, kind: str = 'nil', payload: Any = None):
         object.__setattr__(self, '_kind', kind)
         object.__setattr__(self, '_payload', payload)
         object.__setattr__(self, '_fields', {})
+        object.__setattr__(self, '_metatable', None)
         self._setup_builtins()
 
     def _normalize_field_name(self, name: str) -> str:
@@ -60,31 +73,104 @@ class Table:
             fields['_str_'] = 'table'
 
     def __getattr__(self, name: str):
-        fields = object.__getattribute__(self, '_fields')
-        val = fields.get(self._normalize_field_name(name))
-        if val is None:
-            return make_nil()
-        if isinstance(val, Table):
-            return val
-        return make_value(val)
+        key = self._normalize_field_name(name)
+        return self.get_by_key(key)
 
     def __setattr__(self, name: str, value: Any):
-        if name in ('_kind', '_payload', '_fields'):
+        if name in ('_kind', '_payload', '_fields', '_metatable'):
             object.__setattr__(self, name, value)
         else:
-            if not isinstance(value, Table):
-                value = make_value(value)
             key = self._normalize_field_name(name)
-            object.__getattribute__(self, '_fields')[key] = value
+            self.set_by_key(key, value)
+
+    @staticmethod
+    def _table_key(key: Any) -> Any:
+        if isinstance(key, Table):
+            if key._kind == 'number':
+                n = key._payload
+                if float(n).is_integer():
+                    return int(n)
+                return float(n)
+            if key._kind == 'string':
+                return key._payload
+            if key._kind == 'boolean':
+                return bool(key._payload)
+            if key._kind == 'nil':
+                return None
+            return key
+        if isinstance(key, float) and key.is_integer():
+            return int(key)
+        if isinstance(key, str):
+            return Table.LEGACY_FIELD_ALIASES.get(key, key)
+        return key
+
+    def raw_get(self, key: Any) -> 'Table':
+        key = self._table_key(key)
+        fields = object.__getattribute__(self, '_fields')
+        val = fields.get(key)
+        if val is None:
+            return make_nil()
+        return val if isinstance(val, Table) else make_value(val)
+
+    def raw_set(self, key: Any, value: Any) -> 'Table':
+        key = self._table_key(key)
+        fields = object.__getattribute__(self, '_fields')
+        fields[key] = value if isinstance(value, Table) else make_value(value)
+        return self
+
+    def get_by_key(self, key: Any) -> 'Table':
+        resolved = self.raw_get(key)
+        if resolved._kind != 'nil':
+            return resolved
+
+        metatable = object.__getattribute__(self, '_metatable')
+        if isinstance(metatable, Table):
+            index_handler = metatable.raw_get('_index_')
+            if index_handler._kind != 'nil':
+                if index_handler._kind == 'table':
+                    return index_handler.get_by_key(key)
+                return index_handler(self, make_value(key))
+        return make_nil()
+
+    def set_by_key(self, key: Any, value: Any):
+        existing = self.raw_get(key)
+        if existing._kind != 'nil':
+            self.raw_set(key, value)
+            return
+
+        metatable = object.__getattribute__(self, '_metatable')
+        if isinstance(metatable, Table):
+            newindex_handler = metatable.raw_get('_newindex_')
+            if newindex_handler._kind != 'nil':
+                if newindex_handler._kind == 'table':
+                    newindex_handler.set_by_key(key, value)
+                    return
+                newindex_handler(self, make_value(key), make_value(value))
+                return
+        self.raw_set(key, value)
 
     def __call__(self, *args):
         fields = object.__getattribute__(self, '_fields')
         if '_call_' in fields:
             call_val = fields['_call_']
+            if isinstance(call_val, Table) and call_val._kind == 'function':
+                return call_val(*args)
             if callable(call_val):
                 result = call_val(*args)
                 return make_value(result) if not isinstance(result, Table) else result
             return make_value(call_val)
+
+        metatable = object.__getattribute__(self, '_metatable')
+        if isinstance(metatable, Table):
+            mt_fields = object.__getattribute__(metatable, '_fields')
+            if '_call_' in mt_fields:
+                call_handler = mt_fields['_call_']
+                if isinstance(call_handler, Table) and call_handler._kind == 'function':
+                    return call_handler(self, *args)
+                if callable(call_handler):
+                    result = call_handler(self, *args)
+                    return make_value(result) if not isinstance(result, Table) else result
+
         self_key = fields.get('_self_')
         if isinstance(self_key, str) and self_key in fields:
             val = fields[self_key]
@@ -112,11 +198,14 @@ class Table:
 
     # Metamethods (add/sub/etc. can be Python callable OR a function Table)
     def _call_magic(self, name: str, other: 'Table') -> 'Table':
-        fields = object.__getattribute__(self, '_fields')
-        if name in fields:
-            magic = fields[name]
-            if isinstance(magic, Table):
-                return magic(self, other)          # calls the function Table
+        magic = self.raw_get(name)
+        if magic._kind == 'nil':
+            metatable = object.__getattribute__(self, '_metatable')
+            if isinstance(metatable, Table):
+                magic = metatable.raw_get(name)
+        if magic._kind != 'nil':
+            if isinstance(magic, Table) and magic._kind == 'function':
+                return magic(self, other)
             if callable(magic):
                 result = magic(self, other)
                 return make_value(result) if not isinstance(result, Table) else result
@@ -254,7 +343,7 @@ def make_function(py_callable: Callable) -> Table:
 def make_array(items: List[Any]) -> Table:
     t = Table('table')
     for i, v in enumerate(items, 1):
-        t._fields[str(i)] = v if isinstance(v, Table) else make_value(v)
+        t._fields[i] = v if isinstance(v, Table) else make_value(v)
     return t
 
 def make_value(v: Any) -> Table:
@@ -272,6 +361,11 @@ def make_value(v: Any) -> Table:
         return make_function(v)
     if isinstance(v, list):
         return make_array(v)
+    if isinstance(v, dict):
+        t = Table('table')
+        for k, val in v.items():
+            t.raw_set(k, val)
+        return t
     raise ValueError(f"Cannot convert {type(v)} to Table")
 
 
@@ -317,7 +411,7 @@ class Lexer:
             ('KEYWORD',  r'\b(if|elseif|else|end|then|while|do|for|repeat|until|local|function|return|and|or|not|true|false|nil)\b'),
             ('IDENT',    r'[a-zA-Z_][a-zA-Z0-9_]*'),
             ('COMMENT',  r'--.*'),
-            ('OP',       r'==|~=|<=|>=|::|\.\.|->|\+|-|\*|/|%|\^|<|>|<=|>=|=|,|;|\.|\[|\]|\{|\}|\(|\)'),
+            ('OP',       r'==|~=|<=|>=|::|\.\.|->|\+|-|\*|/|%|\^|#|<|>|<=|>=|=|,|;|\.|\[|\]|\{|\}|\(|\)'),
             ('WHITESPACE', r'\s+'),
         ]
         pattern = '|'.join(f'(?P<{name}>{regex})' for name, regex in token_spec)
@@ -374,8 +468,9 @@ class Call(ASTNode):
         self.args = args
 
 class TableConstructor(ASTNode):
-    def __init__(self, fields: List[tuple]):
+    def __init__(self, fields: List[tuple], array_items: List[ASTNode]):
         self.fields = fields
+        self.array_items = array_items
 
 class AssignStmt(ASTNode):
     def __init__(self, left: ASTNode, right: ASTNode, is_local: bool = False):
@@ -439,6 +534,10 @@ class Parser:
 
     def current(self) -> Token:
         return self.tokens[self.pos] if self.pos < len(self.tokens) else Token('EOF', '')
+
+    def peek(self, offset: int = 1) -> Token:
+        idx = self.pos + offset
+        return self.tokens[idx] if idx < len(self.tokens) else Token('EOF', '')
 
     def advance(self):
         self.pos += 1
@@ -691,6 +790,7 @@ class Parser:
 
     def parse_table_constructor(self) -> TableConstructor:
         fields = []
+        array_items = []
         while self.current().value not in ('}', 'EOF'):
             if self.match('OP', '['):
                 key = self.parse_expression()
@@ -698,17 +798,17 @@ class Parser:
                 self.expect('OP', '=')
                 val = self.parse_expression()
                 fields.append((key, val))
-            elif self.current().type == 'IDENT':
+            elif self.current().type == 'IDENT' and self.peek().value == '=':
                 key = self.current().value
                 self.advance()
                 self.expect('OP', '=')
                 val = self.parse_expression()
                 fields.append((key, val))
             else:
-                raise SyntaxError(f"Unexpected token in table constructor: {self.current()}")
+                array_items.append(self.parse_expression())
             self.match('OP', ',') or self.match('OP', ';')
         self.expect('OP', '}')
-        return TableConstructor(fields)
+        return TableConstructor(fields, array_items)
 
 
 # =============================================================================
@@ -721,6 +821,25 @@ class Interpreter:
             lambda *args: print(' '.join(a.get_str() for a in args)) or make_nil()
         )
         self.global_env['but'] = make_function(lambda l, r: but(l, r))
+        self.global_env['setmetatable'] = make_function(self._set_metatable)
+        self.global_env['getmetatable'] = make_function(self._get_metatable)
+        self.global_env['rawget'] = make_function(self._raw_get)
+        self.global_env['rawset'] = make_function(self._raw_set)
+
+    def _set_metatable(self, target: Table, metatable: Table) -> Table:
+        target._metatable = metatable
+        return target
+
+    def _get_metatable(self, target: Table) -> Table:
+        mt = target._metatable
+        return mt if isinstance(mt, Table) else make_nil()
+
+    def _raw_get(self, target: Table, key: Table) -> Table:
+        return target.raw_get(key)
+
+    def _raw_set(self, target: Table, key: Table, value: Table) -> Table:
+        target.raw_set(key, value)
+        return target
 
     def execute(self, program: List[ASTNode], capture_results: bool = False) -> List[Table]:
         env = self.global_env
@@ -743,7 +862,7 @@ class Interpreter:
             elif isinstance(stmt.left, FieldAccess):
                 obj = self._eval_expr(stmt.left.obj, env)
                 key = self._key_to_str(stmt.left.key, env)
-                obj._fields[key] = value
+                obj.set_by_key(key, value)
             return None
         elif isinstance(stmt, IfStmt):
             if bool(self._eval_expr(stmt.condition, env)):
@@ -816,11 +935,11 @@ class Interpreter:
             return None
         return None
 
-    def _key_to_str(self, key_node: Union[str, ASTNode], env: Dict[str, Table]) -> str:
+    def _key_to_str(self, key_node: Union[str, ASTNode], env: Dict[str, Table]) -> Any:
         if isinstance(key_node, str):
             return key_node
         key_val = self._eval_expr(key_node, env)
-        return key_val.get_str() if hasattr(key_val, 'get_str') else str(key_val._payload)
+        return Table._table_key(key_val)
 
     def _eval_expr(self, expr: ASTNode, env: Dict[str, Table]) -> Table:
         if isinstance(expr, Literal):
@@ -845,6 +964,18 @@ class Interpreter:
                 return left if bool(left) else self._eval_expr(expr.right, env)
             if expr.op == 'not':
                 return make_bool(not bool(left))
+            if expr.op == '-':
+                if expr.right is None:
+                    return make_number(-float(left._payload))
+            if expr.op == '#':
+                if left._kind == 'string':
+                    return make_number(len(left._payload))
+                if left._kind == 'table':
+                    n = 0
+                    while left.raw_get(n + 1)._kind != 'nil':
+                        n += 1
+                    return make_number(n)
+                return make_number(0)
             right = self._eval_expr(expr.right, env)
             if expr.op == '..':
                 lstr = left.get_str() if isinstance(left, Table) else str(left)
@@ -872,7 +1003,7 @@ class Interpreter:
         if isinstance(expr, FieldAccess):
             obj = self._eval_expr(expr.obj, env)
             key = self._key_to_str(expr.key, env)
-            return getattr(obj, key, make_nil())
+            return obj.get_by_key(key)
 
         if isinstance(expr, Call):
             func = self._eval_expr(expr.func, env)
@@ -881,10 +1012,12 @@ class Interpreter:
 
         if isinstance(expr, TableConstructor):
             t = Table('table')
+            for index, item in enumerate(expr.array_items, 1):
+                t.raw_set(index, self._eval_expr(item, env))
             for k_node, v_node in expr.fields:
                 key = self._key_to_str(k_node, env)
                 val = self._eval_expr(v_node, env)
-                t._fields[key] = val
+                t.set_by_key(key, val)
             return t
 
         if isinstance(expr, FunctionLiteral):
@@ -956,7 +1089,7 @@ def _read_repl_line(prompt: str, block_depth: int) -> str:
 
 
 def repl():
-    print("Tablua REPL (type 'exit' or 'quit' to leave)")
+    print("Lux REPL (type 'exit' or 'quit' to leave)")
     interp = Interpreter()
     buffer: List[str] = []
     block_depth = 0
